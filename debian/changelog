@@ -1,0 +1,151 @@
+node-htmlparser2 (7.1.2-4) unstable; urgency=medium
+
+  * Team upload
+  * Source-only upload
+
+ -- Yadd <yadd@debian.org>  Tue, 19 Oct 2021 14:34:10 +0200
+
+node-htmlparser2 (7.1.2-3) unstable; urgency=medium
+
+  * Team upload
+  * Binary upload to workaround circular test dependencies
+
+ -- Yadd <yadd@debian.org>  Sat, 16 Oct 2021 08:46:31 +0200
+
+node-htmlparser2 (7.1.2-2) unstable; urgency=medium
+
+  * Team upload
+  * Back to unstable
+
+ -- Yadd <yadd@debian.org>  Sat, 16 Oct 2021 08:28:41 +0200
+
+node-htmlparser2 (7.1.2-1) experimental; urgency=medium
+
+  * Team upload
+  * Fix GitHub tags regex
+  * Update standards version to 4.6.0, no changes needed.
+  * New upstream version 7.1.2
+  * Enable upstream test using jest ≥ 27
+
+ -- Yadd <yadd@debian.org>  Wed, 13 Oct 2021 13:21:54 +0200
+
+node-htmlparser2 (6.0.0-5) unstable; urgency=medium
+
+  * Team upload
+  * Source-only upload
+
+ -- Xavier Guimard <yadd@debian.org>  Sun, 10 Jan 2021 20:18:09 +0100
+
+node-htmlparser2 (6.0.0-4) unstable; urgency=medium
+
+  * Team upload
+  * Binary upload to workaround circular build dependencies
+
+ -- Xavier Guimard <yadd@debian.org>  Sun, 10 Jan 2021 09:48:33 +0100
+
+node-htmlparser2 (6.0.0-3) unstable; urgency=medium
+
+  * Team upload
+  * Back to unstable after successful tests
+
+ -- Xavier Guimard <yadd@debian.org>  Sat, 09 Jan 2021 22:06:11 +0100
+
+node-htmlparser2 (6.0.0-2) experimental; urgency=medium
+
+  * Team upload
+  * Indicate that it breaks node-cheerio < 1.0.0~rc~5+~cs6.1.2~
+
+ -- Xavier Guimard <yadd@debian.org>  Sat, 09 Jan 2021 06:11:34 +0100
+
+node-htmlparser2 (6.0.0-1) experimental; urgency=medium
+
+  * Team upload
+  * New upstream version 6.0.0
+  * Replace embedded @types/istanbul* by build dependency to node-istanbul
+  * Dependencies:
+    + Update node-domhandler and node-domutils minimal versions
+    + Drop dependencies to nodejs, node-events and node-inherits
+  * Update copyright
+  * Set upstream metadata fields: Security-Contact.
+
+ -- Xavier Guimard <yadd@debian.org>  Fri, 08 Jan 2021 14:47:41 +0100
+
+node-htmlparser2 (5.0.1-1) unstable; urgency=medium
+
+  * Team upload
+
+  [ Debian Janitor ]
+  * Set upstream metadata fields: Bug-Submit.
+
+  [ Xavier Guimard ]
+  * Declare compliance with policy 4.5.1
+  * Modernize debian/watch
+  * New upstream version 5.0.1
+
+ -- Xavier Guimard <yadd@debian.org>  Wed, 02 Dec 2020 13:10:36 +0100
+
+node-htmlparser2 (5.0.0-1) unstable; urgency=medium
+
+  * Team upload
+  * Bump debhelper compatibility level to 13
+  * Use dh-sequence-nodejs
+  * New upstream version 5.0.0
+
+ -- Xavier Guimard <yadd@debian.org>  Tue, 06 Oct 2020 16:31:32 +0200
+
+node-htmlparser2 (4.1.0-1) unstable; urgency=medium
+
+  * Team upload
+  * Use pkg-js-tools auto link
+  * Declare compliance with policy 4.5.0
+  * New upstream version 4.1.0
+
+ -- Xavier Guimard <yadd@debian.org>  Fri, 01 May 2020 09:01:53 +0200
+
+node-htmlparser2 (4.0.0-2) unstable; urgency=medium
+
+  * Team upload
+  * Fix dependencies
+  * Add "Rules-Requires-Root: no"
+
+ -- Xavier Guimard <yadd@debian.org>  Thu, 17 Oct 2019 21:59:48 +0200
+
+node-htmlparser2 (4.0.0-1) unstable; urgency=medium
+
+  * Team upload
+
+  [ Martin ]
+  * remove myself from uploaders
+
+  [ Xavier Guimard ]
+  * Bump debhelper compatibility level to 12
+  * Declare compliance with policy 4.4.1
+  * Change section to javascript
+  * Add debian/gbp.conf
+  * Add upstream/metadata
+  * New upstream version 4.0.0
+  * Embed @types/istanbul-lib-coverage and @types/istanbul-lib-report for
+    build
+  * Switch install to pkg-js-tools
+  * Update VCS fields to salsa
+  * Update debian/copyright
+
+ -- Xavier Guimard <yadd@debian.org>  Wed, 16 Oct 2019 22:25:34 +0200
+
+node-htmlparser2 (3.9.2-1) unstable; urgency=low
+
+  * New upstream release
+  * Unbundle node-dom{elementtype,handler,utils} (Closes: #794988)
+
+ -- Paolo Greppi <paolo.greppi@libpf.com>  Wed, 11 Jan 2017 17:50:19 +0100
+
+node-htmlparser2 (3.7.3-1) unstable; urgency=low
+
+  * Initial release (Closes: #761433)
+  * Direct dependencies node-dom{elementtype,handler,utils} packaged
+    with this package, because they don't have any other reverse
+    depends and are too small to justify Debian packages.
+    (Closes: #761437, #761438, #761439)
+    node-readable-stream is optional, no need to package.
+
+ -- W. Martin Borgert <debacle@debian.org>  Sun, 21 Sep 2014 19:46:09 +0000

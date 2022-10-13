@@ -1,0 +1,37 @@
+Source: node-htmlparser2
+Maintainer: Debian Javascript Maintainers <pkg-javascript-devel@lists.alioth.debian.org>
+Uploaders: Paolo Greppi <paolo.greppi@libpf.com>
+Section: javascript
+Testsuite: autopkgtest-pkg-nodejs
+Priority: optional
+Build-Depends: debhelper-compat (= 13)
+ , dh-sequence-nodejs
+ , jest (>= 27) <!nocheck>
+ , node-domelementtype (>= 2.0.1~)
+ , node-domhandler (>= 4.2.2~)
+ , node-domutils (>= 2.8.0~)
+ , node-entities (>= 3.0.1~)
+ , node-istanbul
+ , node-typescript
+ , node-types-node
+ , ts-jest (>= 27) <!nocheck>
+Standards-Version: 4.6.0
+Vcs-Browser: https://salsa.debian.org/js-team/node-htmlparser2
+Vcs-Git: https://salsa.debian.org/js-team/node-htmlparser2.git
+Homepage: https://github.com/fb55/htmlparser2#readme
+Rules-Requires-Root: no
+
+Package: node-htmlparser2
+Architecture: all
+Depends: ${misc:Depends}
+ , node-domelementtype (>= 2.0.1~)
+ , node-domhandler (>= 4.2.2~)
+ , node-domutils (>= 2.8.0~)
+ , node-entities (>= 3.0.1~)
+Breaks: node-cheerio (<< 1.0.0~rc~5+~cs6.1.2~)
+Description: Fast & forgiving HTML/XML/RSS parser
+ A forgiving HTML/XML/RSS parser written in JS for NodeJS. The
+ parser can handle streams (chunked data) and supports custom
+ handlers for writing custom DOMs/output.
+ .
+ Node.js is an event-based server-side JavaScript engine.
