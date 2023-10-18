@@ -6,16 +6,16 @@ Testsuite: autopkgtest-pkg-nodejs
 Priority: optional
 Build-Depends: debhelper-compat (= 13)
  , dh-sequence-nodejs
- , jest (>= 27) <!nocheck>
- , node-domelementtype (>= 2.0.1~)
- , node-domhandler (>= 4.2.2~)
- , node-domutils (>= 2.8.0~)
- , node-entities (>= 3.0.1~)
+ , jest (>= 29) <!nocheck>
+ , node-domelementtype (>= 2.3.0~)
+ , node-domhandler (>= 5.0.2~)
+ , node-domutils (>= 3.1.0~)
+ , node-entities (>= 4.5.0~)
  , node-istanbul
  , node-typescript
  , node-types-node
  , ts-jest (>= 27) <!nocheck>
-Standards-Version: 4.6.0
+Standards-Version: 4.6.2
 Vcs-Browser: https://salsa.debian.org/js-team/node-htmlparser2
 Vcs-Git: https://salsa.debian.org/js-team/node-htmlparser2.git
 Homepage: https://github.com/fb55/htmlparser2#readme
@@ -24,10 +24,10 @@ Rules-Requires-Root: no
 Package: node-htmlparser2
 Architecture: all
 Depends: ${misc:Depends}
- , node-domelementtype (>= 2.0.1~)
- , node-domhandler (>= 4.2.2~)
- , node-domutils (>= 2.8.0~)
- , node-entities (>= 3.0.1~)
+ , node-domelementtype (>= 2.3.0~~)
+ , node-domhandler (>= 5.0.2~)
+ , node-domutils (>= 3.1.0~)
+ , node-entities (>= 4.5.0~)
 Breaks: node-cheerio (<< 1.0.0~rc~5+~cs6.1.2~)
 Description: Fast & forgiving HTML/XML/RSS parser
  A forgiving HTML/XML/RSS parser written in JS for NodeJS. The

@@ -1,7 +1,23 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
+exports[`Index createDocumentStream 1`] = `
+Document {
+  "children": [
+    &This is text,
+    <!-- and comments -->,
+    <tags />,
+  ],
+  "endIndex": null,
+  "next": null,
+  "parent": null,
+  "prev": null,
+  "startIndex": null,
+  "type": "root",
+}
+`;
+
 exports[`Index createDomStream 1`] = `
-Array [
+[
   &This is text,
   <!-- and comments -->,
   <tags />,
@@ -9,7 +25,7 @@ Array [
 `;
 
 exports[`Index parseDOM 1`] = `
-Array [
+[
   <a
     foo=""
   >
@@ -37,7 +53,7 @@ Array [
 
 exports[`Index parseDocument 1`] = `
 Document {
-  "children": Array [
+  "children": [
     <a
       foo=""
     >

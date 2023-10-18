@@ -1,8 +1,0 @@
-domelementtype
-domhandler
-domutils
-dom-serializer
-entities
-@types/istanbul-lib-coverage
-@types/jest	test
-@types/node

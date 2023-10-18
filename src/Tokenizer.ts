@@ -1,10 +1,9 @@
-import decodeCodePoint from "entities/lib/decode_codepoint";
 import {
+    EntityDecoder,
+    DecodingMode,
     htmlDecodeTree,
     xmlDecodeTree,
-    BinTrieFlags,
-    determineBranch,
-} from "entities/lib/decode";
+} from "entities/lib/decode.js";
 
 const enum CharCodes {
     Tab = 0x9, // "\t"
@@ -13,7 +12,7 @@ const enum CharCodes {
     CarriageReturn = 0xd, // "\r"
     Space = 0x20, // " "
     ExclamationMark = 0x21, // "!"
-    Num = 0x23, // "#"
+    Number = 0x23, // "#"
     Amp = 0x26, // "&"
     SingleQuote = 0x27, // "'"
     DoubleQuote = 0x22, // '"'
@@ -26,20 +25,14 @@ const enum CharCodes {
     Eq = 0x3d, // "="
     Gt = 0x3e, // ">"
     Questionmark = 0x3f, // "?"
-    UpperC = 0x43, // "C"
-    LowerC = 0x63, // "c"
-    UpperS = 0x53, // "S"
-    LowerS = 0x73, // "s"
-    UpperT = 0x54, // "T"
-    LowerT = 0x74, // "t"
     UpperA = 0x41, // "A"
     LowerA = 0x61, // "a"
     UpperF = 0x46, // "F"
     LowerF = 0x66, // "f"
     UpperZ = 0x5a, // "Z"
     LowerZ = 0x7a, // "z"
+    LowerX = 0x78, // "x"
     OpeningSquareBracket = 0x5b, // "["
-    ClosingSquareBracket = 0x5d, // "]"
 }
 
 /** All the states the tokenizer can be in. */
@@ -68,74 +61,21 @@ const enum State {
     // Processing instructions
     InProcessingInstruction, // ?
 
-    // Comments
+    // Comments & CDATA
     BeforeComment,
-    InComment,
+    CDATASequence,
     InSpecialComment,
-    AfterComment1,
-    AfterComment2,
-
-    // Cdata
-    BeforeCdata1, // [
-    BeforeCdata2, // C
-    BeforeCdata3, // D
-    BeforeCdata4, // A
-    BeforeCdata5, // T
-    BeforeCdata6, // A
-    InCdata, // [
-    AfterCdata1, // ]
-    AfterCdata2, // ]
+    InCommentLike,
 
     // Special tags
-    BeforeSpecialS, // S
-    BeforeSpecialSEnd, // S
+    BeforeSpecialS, // Decide if we deal with `<script` or `<style`
+    SpecialStartSequence,
+    InSpecialTag,
 
-    BeforeScript1, // C
-    BeforeScript2, // R
-    BeforeScript3, // I
-    BeforeScript4, // P
-    BeforeScript5, // T
-    AfterScript1, // C
-    AfterScript2, // R
-    AfterScript3, // I
-    AfterScript4, // P
-    AfterScript5, // T
-
-    BeforeStyle1, // T
-    BeforeStyle2, // Y
-    BeforeStyle3, // L
-    BeforeStyle4, // E
-    AfterStyle1, // T
-    AfterStyle2, // Y
-    AfterStyle3, // L
-    AfterStyle4, // E
-
-    BeforeSpecialT, // T
-    BeforeSpecialTEnd, // T
-    BeforeTitle1, // I
-    BeforeTitle2, // T
-    BeforeTitle3, // L
-    BeforeTitle4, // E
-    AfterTitle1, // I
-    AfterTitle2, // T
-    AfterTitle3, // L
-    AfterTitle4, // E
-
-    BeforeEntity, // &
-    BeforeNumericEntity, // #
-    InNamedEntity,
-    InNumericEntity,
-    InHexEntity, // X
+    InEntity,
 }
 
-const enum Special {
-    None = 1,
-    Script,
-    Style,
-    Title,
-}
-
-function whitespace(c: number): boolean {
+function isWhitespace(c: number): boolean {
     return (
         c === CharCodes.Space ||
         c === CharCodes.NewLine ||
@@ -145,6 +85,10 @@ function whitespace(c: number): boolean {
     );
 }
 
+function isEndOfTagSection(c: number): boolean {
+    return c === CharCodes.Slash || c === CharCodes.Gt || isWhitespace(c);
+}
+
 function isASCIIAlpha(c: number): boolean {
     return (
         (c >= CharCodes.LowerA && c <= CharCodes.LowerZ) ||
@@ -152,143 +96,69 @@ function isASCIIAlpha(c: number): boolean {
     );
 }
 
+export enum QuoteType {
+    NoValue = 0,
+    Unquoted = 1,
+    Single = 2,
+    Double = 3,
+}
+
 export interface Callbacks {
-    onattribdata(value: string): void;
-    onattribend(quote: string | undefined | null): void;
-    onattribname(name: string): void;
-    oncdata(data: string): void;
-    onclosetag(name: string): void;
-    oncomment(data: string): void;
-    ondeclaration(content: string): void;
+    onattribdata(start: number, endIndex: number): void;
+    onattribentity(codepoint: number): void;
+    onattribend(quote: QuoteType, endIndex: number): void;
+    onattribname(start: number, endIndex: number): void;
+    oncdata(start: number, endIndex: number, endOffset: number): void;
+    onclosetag(start: number, endIndex: number): void;
+    oncomment(start: number, endIndex: number, endOffset: number): void;
+    ondeclaration(start: number, endIndex: number): void;
     onend(): void;
-    onerror(error: Error, state?: State): void;
-    onopentagend(): void;
-    onopentagname(name: string): void;
-    onprocessinginstruction(instruction: string): void;
-    onselfclosingtag(): void;
-    ontext(value: string): void;
+    onopentagend(endIndex: number): void;
+    onopentagname(start: number, endIndex: number): void;
+    onprocessinginstruction(start: number, endIndex: number): void;
+    onselfclosingtag(endIndex: number): void;
+    ontext(start: number, endIndex: number): void;
+    ontextentity(codepoint: number, endIndex: number): void;
 }
 
-function ifElseState(upper: string, SUCCESS: State, FAILURE: State) {
-    const upperCode = upper.charCodeAt(0);
-    const lowerCode = upper.toLowerCase().charCodeAt(0);
-
-    return (t: Tokenizer, c: number) => {
-        if (c === lowerCode || c === upperCode) {
-            t._state = SUCCESS;
-        } else {
-            t._state = FAILURE;
-            t._index--;
-        }
-    };
-}
-
-const stateBeforeCdata1 = ifElseState(
-    "C",
-    State.BeforeCdata2,
-    State.InDeclaration
-);
-const stateBeforeCdata2 = ifElseState(
-    "D",
-    State.BeforeCdata3,
-    State.InDeclaration
-);
-const stateBeforeCdata3 = ifElseState(
-    "A",
-    State.BeforeCdata4,
-    State.InDeclaration
-);
-const stateBeforeCdata4 = ifElseState(
-    "T",
-    State.BeforeCdata5,
-    State.InDeclaration
-);
-const stateBeforeCdata5 = ifElseState(
-    "A",
-    State.BeforeCdata6,
-    State.InDeclaration
-);
-
-const stateBeforeScript1 = ifElseState(
-    "R",
-    State.BeforeScript2,
-    State.InTagName
-);
-const stateBeforeScript2 = ifElseState(
-    "I",
-    State.BeforeScript3,
-    State.InTagName
-);
-const stateBeforeScript3 = ifElseState(
-    "P",
-    State.BeforeScript4,
-    State.InTagName
-);
-const stateBeforeScript4 = ifElseState(
-    "T",
-    State.BeforeScript5,
-    State.InTagName
-);
-
-const stateAfterScript1 = ifElseState("R", State.AfterScript2, State.Text);
-const stateAfterScript2 = ifElseState("I", State.AfterScript3, State.Text);
-const stateAfterScript3 = ifElseState("P", State.AfterScript4, State.Text);
-const stateAfterScript4 = ifElseState("T", State.AfterScript5, State.Text);
-
-const stateBeforeStyle1 = ifElseState("Y", State.BeforeStyle2, State.InTagName);
-const stateBeforeStyle2 = ifElseState("L", State.BeforeStyle3, State.InTagName);
-const stateBeforeStyle3 = ifElseState("E", State.BeforeStyle4, State.InTagName);
-
-const stateAfterStyle1 = ifElseState("Y", State.AfterStyle2, State.Text);
-const stateAfterStyle2 = ifElseState("L", State.AfterStyle3, State.Text);
-const stateAfterStyle3 = ifElseState("E", State.AfterStyle4, State.Text);
-
-const stateBeforeSpecialT = ifElseState(
-    "I",
-    State.BeforeTitle1,
-    State.InTagName
-);
-const stateBeforeTitle1 = ifElseState("T", State.BeforeTitle2, State.InTagName);
-const stateBeforeTitle2 = ifElseState("L", State.BeforeTitle3, State.InTagName);
-const stateBeforeTitle3 = ifElseState("E", State.BeforeTitle4, State.InTagName);
-
-const stateBeforeSpecialTEnd = ifElseState("I", State.AfterTitle1, State.Text);
-const stateAfterTitle1 = ifElseState("T", State.AfterTitle2, State.Text);
-const stateAfterTitle2 = ifElseState("L", State.AfterTitle3, State.Text);
-const stateAfterTitle3 = ifElseState("E", State.AfterTitle4, State.Text);
-
-const stateBeforeNumericEntity = ifElseState(
-    "X",
-    State.InHexEntity,
-    State.InNumericEntity
-);
+/**
+ * Sequences used to match longer strings.
+ *
+ * We don't have `Script`, `Style`, or `Title` here. Instead, we re-use the *End
+ * sequences with an increased offset.
+ */
+const Sequences = {
+    Cdata: new Uint8Array([0x43, 0x44, 0x41, 0x54, 0x41, 0x5b]), // CDATA[
+    CdataEnd: new Uint8Array([0x5d, 0x5d, 0x3e]), // ]]>
+    CommentEnd: new Uint8Array([0x2d, 0x2d, 0x3e]), // `-->`
+    ScriptEnd: new Uint8Array([0x3c, 0x2f, 0x73, 0x63, 0x72, 0x69, 0x70, 0x74]), // `</script`
+    StyleEnd: new Uint8Array([0x3c, 0x2f, 0x73, 0x74, 0x79, 0x6c, 0x65]), // `</style`
+    TitleEnd: new Uint8Array([0x3c, 0x2f, 0x74, 0x69, 0x74, 0x6c, 0x65]), // `</title`
+};
 
 export default class Tokenizer {
     /** The current state the tokenizer is in. */
-    _state = State.Text;
+    private state = State.Text;
     /** The read buffer. */
     private buffer = "";
     /** The beginning of the section that is currently being read. */
-    public sectionStart = 0;
+    private sectionStart = 0;
     /** The index within the buffer that we are currently looking at. */
-    _index = 0;
-    /**
-     * Data that has already been processed will be removed from the buffer occasionally.
-     * `_bufferOffset` keeps track of how many characters have been removed, to make sure position information is accurate.
-     */
-    private bufferOffset = 0;
+    private index = 0;
+    /** The start of the last entity. */
+    private entityStart = 0;
     /** Some behavior, eg. when decoding entities, is done while we are in another state. This keeps track of the other state type. */
     private baseState = State.Text;
     /** For special parsing behavior inside of script and style tags. */
-    private special = Special.None;
+    private isSpecial = false;
     /** Indicates whether the tokenizer has been paused. */
-    private running = true;
-    /** Indicates whether the tokenizer has finished running / `.end` has been called. */
-    private ended = false;
+    public running = true;
+    /** The offset of the current buffer. */
+    private offset = 0;
 
     private readonly xmlMode: boolean;
     private readonly decodeEntities: boolean;
-    private readonly entityTrie: Uint16Array;
+    private readonly entityDecoder: EntityDecoder;
 
     constructor(
         {
@@ -299,32 +169,30 @@ export default class Tokenizer {
     ) {
         this.xmlMode = xmlMode;
         this.decodeEntities = decodeEntities;
-        this.entityTrie = xmlMode ? xmlDecodeTree : htmlDecodeTree;
+        this.entityDecoder = new EntityDecoder(
+            xmlMode ? xmlDecodeTree : htmlDecodeTree,
+            (cp, consumed) => this.emitCodePoint(cp, consumed)
+        );
     }
 
     public reset(): void {
-        this._state = State.Text;
+        this.state = State.Text;
         this.buffer = "";
         this.sectionStart = 0;
-        this._index = 0;
-        this.bufferOffset = 0;
+        this.index = 0;
         this.baseState = State.Text;
-        this.special = Special.None;
+        this.currentSequence = undefined!;
         this.running = true;
-        this.ended = false;
+        this.offset = 0;
     }
 
     public write(chunk: string): void {
-        if (this.ended) return this.cbs.onerror(Error(".write() after done!"));
-        if (this.buffer.length) this.buffer += chunk;
-        else this.buffer = chunk;
+        this.offset += this.buffer.length;
+        this.buffer = chunk;
         this.parse();
     }
 
-    public end(chunk?: string): void {
-        if (this.ended) return this.cbs.onerror(Error(".end() after done!"));
-        if (chunk) this.write(chunk);
-        this.ended = true;
+    public end(): void {
         if (this.running) this.finish();
     }
 
@@ -334,48 +202,160 @@ export default class Tokenizer {
 
     public resume(): void {
         this.running = true;
-        if (this._index < this.buffer.length) {
+        if (this.index < this.buffer.length + this.offset) {
             this.parse();
         }
-        if (this.ended) {
-            this.finish();
-        }
     }
 
-    /**
-     * The start of the current section.
-     */
-    public getAbsoluteSectionStart(): number {
-        return this.sectionStart + this.bufferOffset;
-    }
-
-    /**
-     * The current index within all of the written data.
-     */
-    public getAbsoluteIndex(): number {
-        return this.bufferOffset + this._index;
-    }
-
-    private stateText(c: number) {
-        if (c === CharCodes.Lt) {
-            if (this._index > this.sectionStart) {
-                this.cbs.ontext(this.getSection());
-            }
-            this._state = State.BeforeTagName;
-            this.sectionStart = this._index;
-        } else if (
-            this.decodeEntities &&
-            c === CharCodes.Amp &&
-            (this.special === Special.None || this.special === Special.Title)
+    private stateText(c: number): void {
+        if (
+            c === CharCodes.Lt ||
+            (!this.decodeEntities && this.fastForwardTo(CharCodes.Lt))
         ) {
-            if (this._index > this.sectionStart) {
-                this.cbs.ontext(this.getSection());
+            if (this.index > this.sectionStart) {
+                this.cbs.ontext(this.sectionStart, this.index);
             }
-            this.baseState = State.Text;
-            this._state = State.BeforeEntity;
-            this.sectionStart = this._index;
+            this.state = State.BeforeTagName;
+            this.sectionStart = this.index;
+        } else if (this.decodeEntities && c === CharCodes.Amp) {
+            this.startEntity();
         }
     }
+
+    private currentSequence: Uint8Array = undefined!;
+    private sequenceIndex = 0;
+    private stateSpecialStartSequence(c: number): void {
+        const isEnd = this.sequenceIndex === this.currentSequence.length;
+        const isMatch = isEnd
+            ? // If we are at the end of the sequence, make sure the tag name has ended
+              isEndOfTagSection(c)
+            : // Otherwise, do a case-insensitive comparison
+              (c | 0x20) === this.currentSequence[this.sequenceIndex];
+
+        if (!isMatch) {
+            this.isSpecial = false;
+        } else if (!isEnd) {
+            this.sequenceIndex++;
+            return;
+        }
+
+        this.sequenceIndex = 0;
+        this.state = State.InTagName;
+        this.stateInTagName(c);
+    }
+
+    /** Look for an end tag. For <title> tags, also decode entities. */
+    private stateInSpecialTag(c: number): void {
+        if (this.sequenceIndex === this.currentSequence.length) {
+            if (c === CharCodes.Gt || isWhitespace(c)) {
+                const endOfText = this.index - this.currentSequence.length;
+
+                if (this.sectionStart < endOfText) {
+                    // Spoof the index so that reported locations match up.
+                    const actualIndex = this.index;
+                    this.index = endOfText;
+                    this.cbs.ontext(this.sectionStart, endOfText);
+                    this.index = actualIndex;
+                }
+
+                this.isSpecial = false;
+                this.sectionStart = endOfText + 2; // Skip over the `</`
+                this.stateInClosingTagName(c);
+                return; // We are done; skip the rest of the function.
+            }
+
+            this.sequenceIndex = 0;
+        }
+
+        if ((c | 0x20) === this.currentSequence[this.sequenceIndex]) {
+            this.sequenceIndex += 1;
+        } else if (this.sequenceIndex === 0) {
+            if (this.currentSequence === Sequences.TitleEnd) {
+                // We have to parse entities in <title> tags.
+                if (this.decodeEntities && c === CharCodes.Amp) {
+                    this.startEntity();
+                }
+            } else if (this.fastForwardTo(CharCodes.Lt)) {
+                // Outside of <title> tags, we can fast-forward.
+                this.sequenceIndex = 1;
+            }
+        } else {
+            // If we see a `<`, set the sequence index to 1; useful for eg. `<</script>`.
+            this.sequenceIndex = Number(c === CharCodes.Lt);
+        }
+    }
+
+    private stateCDATASequence(c: number): void {
+        if (c === Sequences.Cdata[this.sequenceIndex]) {
+            if (++this.sequenceIndex === Sequences.Cdata.length) {
+                this.state = State.InCommentLike;
+                this.currentSequence = Sequences.CdataEnd;
+                this.sequenceIndex = 0;
+                this.sectionStart = this.index + 1;
+            }
+        } else {
+            this.sequenceIndex = 0;
+            this.state = State.InDeclaration;
+            this.stateInDeclaration(c); // Reconsume the character
+        }
+    }
+
+    /**
+     * When we wait for one specific character, we can speed things up
+     * by skipping through the buffer until we find it.
+     *
+     * @returns Whether the character was found.
+     */
+    private fastForwardTo(c: number): boolean {
+        while (++this.index < this.buffer.length + this.offset) {
+            if (this.buffer.charCodeAt(this.index - this.offset) === c) {
+                return true;
+            }
+        }
+
+        /*
+         * We increment the index at the end of the `parse` loop,
+         * so set it to `buffer.length - 1` here.
+         *
+         * TODO: Refactor `parse` to increment index before calling states.
+         */
+        this.index = this.buffer.length + this.offset - 1;
+
+        return false;
+    }
+
+    /**
+     * Comments and CDATA end with `-->` and `]]>`.
+     *
+     * Their common qualities are:
+     * - Their end sequences have a distinct character they start with.
+     * - That character is then repeated, so we have to check multiple repeats.
+     * - All characters but the start character of the sequence can be skipped.
+     */
+    private stateInCommentLike(c: number): void {
+        if (c === this.currentSequence[this.sequenceIndex]) {
+            if (++this.sequenceIndex === this.currentSequence.length) {
+                if (this.currentSequence === Sequences.CdataEnd) {
+                    this.cbs.oncdata(this.sectionStart, this.index, 2);
+                } else {
+                    this.cbs.oncomment(this.sectionStart, this.index, 2);
+                }
+
+                this.sequenceIndex = 0;
+                this.sectionStart = this.index + 1;
+                this.state = State.Text;
+            }
+        } else if (this.sequenceIndex === 0) {
+            // Fast-forward to the first character of the sequence
+            if (this.fastForwardTo(this.currentSequence[0])) {
+                this.sequenceIndex = 1;
+            }
+        } else if (c !== this.currentSequence[this.sequenceIndex - 1]) {
+            // Allow long sequences, eg. --->, ]]]>
+            this.sequenceIndex = 0;
+        }
+    }
+
     /**
      * HTML only allows ASCII alpha characters (a-z and A-Z) at the beginning of a tag name.
      *
@@ -383,464 +363,286 @@ export default class Tokenizer {
      * We allow anything that wouldn't end the tag.
      */
     private isTagStartChar(c: number) {
-        return (
-            isASCIIAlpha(c) ||
-            (this.xmlMode &&
-                !whitespace(c) &&
-                c !== CharCodes.Slash &&
-                c !== CharCodes.Gt)
-        );
+        return this.xmlMode ? !isEndOfTagSection(c) : isASCIIAlpha(c);
     }
-    private stateBeforeTagName(c: number) {
-        if (c === CharCodes.Slash) {
-            this._state = State.BeforeClosingTagName;
-        } else if (c === CharCodes.Lt) {
-            this.cbs.ontext(this.getSection());
-            this.sectionStart = this._index;
-        } else if (
-            c === CharCodes.Gt ||
-            this.special !== Special.None ||
-            whitespace(c)
-        ) {
-            this._state = State.Text;
-        } else if (c === CharCodes.ExclamationMark) {
-            this._state = State.BeforeDeclaration;
-            this.sectionStart = this._index + 1;
+
+    private startSpecial(sequence: Uint8Array, offset: number) {
+        this.isSpecial = true;
+        this.currentSequence = sequence;
+        this.sequenceIndex = offset;
+        this.state = State.SpecialStartSequence;
+    }
+
+    private stateBeforeTagName(c: number): void {
+        if (c === CharCodes.ExclamationMark) {
+            this.state = State.BeforeDeclaration;
+            this.sectionStart = this.index + 1;
         } else if (c === CharCodes.Questionmark) {
-            this._state = State.InProcessingInstruction;
-            this.sectionStart = this._index + 1;
-        } else if (!this.isTagStartChar(c)) {
-            this._state = State.Text;
+            this.state = State.InProcessingInstruction;
+            this.sectionStart = this.index + 1;
+        } else if (this.isTagStartChar(c)) {
+            const lower = c | 0x20;
+            this.sectionStart = this.index;
+            if (!this.xmlMode && lower === Sequences.TitleEnd[2]) {
+                this.startSpecial(Sequences.TitleEnd, 3);
+            } else {
+                this.state =
+                    !this.xmlMode && lower === Sequences.ScriptEnd[2]
+                        ? State.BeforeSpecialS
+                        : State.InTagName;
+            }
+        } else if (c === CharCodes.Slash) {
+            this.state = State.BeforeClosingTagName;
         } else {
-            this._state =
-                !this.xmlMode &&
-                (c === CharCodes.LowerS || c === CharCodes.UpperS)
-                    ? State.BeforeSpecialS
-                    : !this.xmlMode &&
-                      (c === CharCodes.LowerT || c === CharCodes.UpperT)
-                    ? State.BeforeSpecialT
-                    : State.InTagName;
-            this.sectionStart = this._index;
+            this.state = State.Text;
+            this.stateText(c);
         }
     }
-    private stateInTagName(c: number) {
-        if (c === CharCodes.Slash || c === CharCodes.Gt || whitespace(c)) {
-            this.cbs.onopentagname(this.getSection());
+    private stateInTagName(c: number): void {
+        if (isEndOfTagSection(c)) {
+            this.cbs.onopentagname(this.sectionStart, this.index);
             this.sectionStart = -1;
-            this._state = State.BeforeAttributeName;
+            this.state = State.BeforeAttributeName;
             this.stateBeforeAttributeName(c);
         }
     }
-    private stateBeforeClosingTagName(c: number) {
-        if (whitespace(c)) {
+    private stateBeforeClosingTagName(c: number): void {
+        if (isWhitespace(c)) {
             // Ignore
         } else if (c === CharCodes.Gt) {
-            this._state = State.Text;
-        } else if (this.special !== Special.None) {
-            if (
-                this.special !== Special.Title &&
-                (c === CharCodes.LowerS || c === CharCodes.UpperS)
-            ) {
-                this._state = State.BeforeSpecialSEnd;
-            } else if (
-                this.special === Special.Title &&
-                (c === CharCodes.LowerT || c === CharCodes.UpperT)
-            ) {
-                this._state = State.BeforeSpecialTEnd;
-            } else {
-                this._state = State.Text;
-                this.stateText(c);
-            }
-        } else if (!this.isTagStartChar(c)) {
-            this._state = State.InSpecialComment;
-            this.sectionStart = this._index;
+            this.state = State.Text;
         } else {
-            this._state = State.InClosingTagName;
-            this.sectionStart = this._index;
+            this.state = this.isTagStartChar(c)
+                ? State.InClosingTagName
+                : State.InSpecialComment;
+            this.sectionStart = this.index;
         }
     }
-    private stateInClosingTagName(c: number) {
-        if (c === CharCodes.Gt || whitespace(c)) {
-            this.cbs.onclosetag(this.getSection());
+    private stateInClosingTagName(c: number): void {
+        if (c === CharCodes.Gt || isWhitespace(c)) {
+            this.cbs.onclosetag(this.sectionStart, this.index);
             this.sectionStart = -1;
-            this._state = State.AfterClosingTagName;
+            this.state = State.AfterClosingTagName;
             this.stateAfterClosingTagName(c);
         }
     }
-    private stateAfterClosingTagName(c: number) {
+    private stateAfterClosingTagName(c: number): void {
         // Skip everything until ">"
-        if (c === CharCodes.Gt) {
-            this._state = State.Text;
-            this.sectionStart = this._index + 1;
+        if (c === CharCodes.Gt || this.fastForwardTo(CharCodes.Gt)) {
+            this.state = State.Text;
+            this.sectionStart = this.index + 1;
         }
     }
-    private stateBeforeAttributeName(c: number) {
+    private stateBeforeAttributeName(c: number): void {
         if (c === CharCodes.Gt) {
-            this.cbs.onopentagend();
-            this._state = State.Text;
-            this.sectionStart = this._index + 1;
+            this.cbs.onopentagend(this.index);
+            if (this.isSpecial) {
+                this.state = State.InSpecialTag;
+                this.sequenceIndex = 0;
+            } else {
+                this.state = State.Text;
+            }
+            this.sectionStart = this.index + 1;
         } else if (c === CharCodes.Slash) {
-            this._state = State.InSelfClosingTag;
-        } else if (!whitespace(c)) {
-            this._state = State.InAttributeName;
-            this.sectionStart = this._index;
+            this.state = State.InSelfClosingTag;
+        } else if (!isWhitespace(c)) {
+            this.state = State.InAttributeName;
+            this.sectionStart = this.index;
         }
     }
-    private stateInSelfClosingTag(c: number) {
+    private stateInSelfClosingTag(c: number): void {
         if (c === CharCodes.Gt) {
-            this.cbs.onselfclosingtag();
-            this._state = State.Text;
-            this.sectionStart = this._index + 1;
-            this.special = Special.None; // Reset special state, in case of self-closing special tags
-        } else if (!whitespace(c)) {
-            this._state = State.BeforeAttributeName;
+            this.cbs.onselfclosingtag(this.index);
+            this.state = State.Text;
+            this.sectionStart = this.index + 1;
+            this.isSpecial = false; // Reset special state, in case of self-closing special tags
+        } else if (!isWhitespace(c)) {
+            this.state = State.BeforeAttributeName;
             this.stateBeforeAttributeName(c);
         }
     }
-    private stateInAttributeName(c: number) {
-        if (
-            c === CharCodes.Eq ||
-            c === CharCodes.Slash ||
-            c === CharCodes.Gt ||
-            whitespace(c)
-        ) {
-            this.cbs.onattribname(this.getSection());
+    private stateInAttributeName(c: number): void {
+        if (c === CharCodes.Eq || isEndOfTagSection(c)) {
+            this.cbs.onattribname(this.sectionStart, this.index);
             this.sectionStart = -1;
-            this._state = State.AfterAttributeName;
+            this.state = State.AfterAttributeName;
             this.stateAfterAttributeName(c);
         }
     }
-    private stateAfterAttributeName(c: number) {
+    private stateAfterAttributeName(c: number): void {
         if (c === CharCodes.Eq) {
-            this._state = State.BeforeAttributeValue;
+            this.state = State.BeforeAttributeValue;
         } else if (c === CharCodes.Slash || c === CharCodes.Gt) {
-            this.cbs.onattribend(undefined);
-            this._state = State.BeforeAttributeName;
+            this.cbs.onattribend(QuoteType.NoValue, this.index);
+            this.state = State.BeforeAttributeName;
             this.stateBeforeAttributeName(c);
-        } else if (!whitespace(c)) {
-            this.cbs.onattribend(undefined);
-            this._state = State.InAttributeName;
-            this.sectionStart = this._index;
+        } else if (!isWhitespace(c)) {
+            this.cbs.onattribend(QuoteType.NoValue, this.index);
+            this.state = State.InAttributeName;
+            this.sectionStart = this.index;
         }
     }
-    private stateBeforeAttributeValue(c: number) {
+    private stateBeforeAttributeValue(c: number): void {
         if (c === CharCodes.DoubleQuote) {
-            this._state = State.InAttributeValueDq;
-            this.sectionStart = this._index + 1;
+            this.state = State.InAttributeValueDq;
+            this.sectionStart = this.index + 1;
         } else if (c === CharCodes.SingleQuote) {
-            this._state = State.InAttributeValueSq;
-            this.sectionStart = this._index + 1;
-        } else if (!whitespace(c)) {
-            this.sectionStart = this._index;
-            this._state = State.InAttributeValueNq;
+            this.state = State.InAttributeValueSq;
+            this.sectionStart = this.index + 1;
+        } else if (!isWhitespace(c)) {
+            this.sectionStart = this.index;
+            this.state = State.InAttributeValueNq;
             this.stateInAttributeValueNoQuotes(c); // Reconsume token
         }
     }
     private handleInAttributeValue(c: number, quote: number) {
-        if (c === quote) {
-            this.cbs.onattribdata(this.getSection());
+        if (
+            c === quote ||
+            (!this.decodeEntities && this.fastForwardTo(quote))
+        ) {
+            this.cbs.onattribdata(this.sectionStart, this.index);
             this.sectionStart = -1;
-            this.cbs.onattribend(String.fromCharCode(quote));
-            this._state = State.BeforeAttributeName;
+            this.cbs.onattribend(
+                quote === CharCodes.DoubleQuote
+                    ? QuoteType.Double
+                    : QuoteType.Single,
+                this.index
+            );
+            this.state = State.BeforeAttributeName;
         } else if (this.decodeEntities && c === CharCodes.Amp) {
-            this.cbs.onattribdata(this.getSection());
-            this.baseState = this._state;
-            this._state = State.BeforeEntity;
-            this.sectionStart = this._index;
+            this.startEntity();
         }
     }
-    private stateInAttributeValueDoubleQuotes(c: number) {
+    private stateInAttributeValueDoubleQuotes(c: number): void {
         this.handleInAttributeValue(c, CharCodes.DoubleQuote);
     }
-    private stateInAttributeValueSingleQuotes(c: number) {
+    private stateInAttributeValueSingleQuotes(c: number): void {
         this.handleInAttributeValue(c, CharCodes.SingleQuote);
     }
-    private stateInAttributeValueNoQuotes(c: number) {
-        if (whitespace(c) || c === CharCodes.Gt) {
-            this.cbs.onattribdata(this.getSection());
+    private stateInAttributeValueNoQuotes(c: number): void {
+        if (isWhitespace(c) || c === CharCodes.Gt) {
+            this.cbs.onattribdata(this.sectionStart, this.index);
             this.sectionStart = -1;
-            this.cbs.onattribend(null);
-            this._state = State.BeforeAttributeName;
+            this.cbs.onattribend(QuoteType.Unquoted, this.index);
+            this.state = State.BeforeAttributeName;
             this.stateBeforeAttributeName(c);
         } else if (this.decodeEntities && c === CharCodes.Amp) {
-            this.cbs.onattribdata(this.getSection());
-            this.baseState = this._state;
-            this._state = State.BeforeEntity;
-            this.sectionStart = this._index;
+            this.startEntity();
         }
     }
-    private stateBeforeDeclaration(c: number) {
-        this._state =
-            c === CharCodes.OpeningSquareBracket
-                ? State.BeforeCdata1
-                : c === CharCodes.Dash
-                ? State.BeforeComment
-                : State.InDeclaration;
-    }
-    private stateInDeclaration(c: number) {
-        if (c === CharCodes.Gt) {
-            this.cbs.ondeclaration(this.getSection());
-            this._state = State.Text;
-            this.sectionStart = this._index + 1;
-        }
-    }
-    private stateInProcessingInstruction(c: number) {
-        if (c === CharCodes.Gt) {
-            this.cbs.onprocessinginstruction(this.getSection());
-            this._state = State.Text;
-            this.sectionStart = this._index + 1;
-        }
-    }
-    private stateBeforeComment(c: number) {
-        if (c === CharCodes.Dash) {
-            this._state = State.InComment;
-            this.sectionStart = this._index + 1;
-        } else {
-            this._state = State.InDeclaration;
-        }
-    }
-    private stateInComment(c: number) {
-        if (c === CharCodes.Dash) this._state = State.AfterComment1;
-    }
-    private stateInSpecialComment(c: number) {
-        if (c === CharCodes.Gt) {
-            this.cbs.oncomment(
-                this.buffer.substring(this.sectionStart, this._index)
-            );
-            this._state = State.Text;
-            this.sectionStart = this._index + 1;
-        }
-    }
-    private stateAfterComment1(c: number) {
-        if (c === CharCodes.Dash) {
-            this._state = State.AfterComment2;
-        } else {
-            this._state = State.InComment;
-        }
-    }
-    private stateAfterComment2(c: number) {
-        if (c === CharCodes.Gt) {
-            // Remove 2 trailing chars
-            this.cbs.oncomment(
-                this.buffer.substring(this.sectionStart, this._index - 2)
-            );
-            this._state = State.Text;
-            this.sectionStart = this._index + 1;
-        } else if (c !== CharCodes.Dash) {
-            this._state = State.InComment;
-        }
-        // Else: stay in AFTER_COMMENT_2 (`--->`)
-    }
-    private stateBeforeCdata6(c: number) {
+    private stateBeforeDeclaration(c: number): void {
         if (c === CharCodes.OpeningSquareBracket) {
-            this._state = State.InCdata;
-            this.sectionStart = this._index + 1;
+            this.state = State.CDATASequence;
+            this.sequenceIndex = 0;
         } else {
-            this._state = State.InDeclaration;
-            this.stateInDeclaration(c);
+            this.state =
+                c === CharCodes.Dash
+                    ? State.BeforeComment
+                    : State.InDeclaration;
         }
     }
-    private stateInCdata(c: number) {
-        if (c === CharCodes.ClosingSquareBracket)
-            this._state = State.AfterCdata1;
-    }
-    private stateAfterCdata1(c: number) {
-        if (c === CharCodes.ClosingSquareBracket)
-            this._state = State.AfterCdata2;
-        else this._state = State.InCdata;
-    }
-    private stateAfterCdata2(c: number) {
-        if (c === CharCodes.Gt) {
-            // Remove 2 trailing chars
-            this.cbs.oncdata(
-                this.buffer.substring(this.sectionStart, this._index - 2)
-            );
-            this._state = State.Text;
-            this.sectionStart = this._index + 1;
-        } else if (c !== CharCodes.ClosingSquareBracket) {
-            this._state = State.InCdata;
+    private stateInDeclaration(c: number): void {
+        if (c === CharCodes.Gt || this.fastForwardTo(CharCodes.Gt)) {
+            this.cbs.ondeclaration(this.sectionStart, this.index);
+            this.state = State.Text;
+            this.sectionStart = this.index + 1;
         }
-        // Else: stay in AFTER_CDATA_2 (`]]]>`)
     }
-    private stateBeforeSpecialS(c: number) {
-        if (c === CharCodes.LowerC || c === CharCodes.UpperC) {
-            this._state = State.BeforeScript1;
-        } else if (c === CharCodes.LowerT || c === CharCodes.UpperT) {
-            this._state = State.BeforeStyle1;
+    private stateInProcessingInstruction(c: number): void {
+        if (c === CharCodes.Gt || this.fastForwardTo(CharCodes.Gt)) {
+            this.cbs.onprocessinginstruction(this.sectionStart, this.index);
+            this.state = State.Text;
+            this.sectionStart = this.index + 1;
+        }
+    }
+    private stateBeforeComment(c: number): void {
+        if (c === CharCodes.Dash) {
+            this.state = State.InCommentLike;
+            this.currentSequence = Sequences.CommentEnd;
+            // Allow short comments (eg. <!-->)
+            this.sequenceIndex = 2;
+            this.sectionStart = this.index + 1;
         } else {
-            this._state = State.InTagName;
+            this.state = State.InDeclaration;
+        }
+    }
+    private stateInSpecialComment(c: number): void {
+        if (c === CharCodes.Gt || this.fastForwardTo(CharCodes.Gt)) {
+            this.cbs.oncomment(this.sectionStart, this.index, 0);
+            this.state = State.Text;
+            this.sectionStart = this.index + 1;
+        }
+    }
+    private stateBeforeSpecialS(c: number): void {
+        const lower = c | 0x20;
+        if (lower === Sequences.ScriptEnd[3]) {
+            this.startSpecial(Sequences.ScriptEnd, 4);
+        } else if (lower === Sequences.StyleEnd[3]) {
+            this.startSpecial(Sequences.StyleEnd, 4);
+        } else {
+            this.state = State.InTagName;
             this.stateInTagName(c); // Consume the token again
         }
     }
-    private stateBeforeSpecialSEnd(c: number) {
-        if (
-            this.special === Special.Script &&
-            (c === CharCodes.LowerC || c === CharCodes.UpperC)
-        ) {
-            this._state = State.AfterScript1;
-        } else if (
-            this.special === Special.Style &&
-            (c === CharCodes.LowerT || c === CharCodes.UpperT)
-        ) {
-            this._state = State.AfterStyle1;
-        } else this._state = State.Text;
-    }
-    private stateBeforeSpecialLast(c: number, special: Special) {
-        if (c === CharCodes.Slash || c === CharCodes.Gt || whitespace(c)) {
-            this.special = special;
-        }
-        this._state = State.InTagName;
-        this.stateInTagName(c); // Consume the token again
-    }
-    private stateAfterSpecialLast(c: number, sectionStartOffset: number) {
-        if (c === CharCodes.Gt || whitespace(c)) {
-            this.sectionStart = this._index - sectionStartOffset;
-            this.special = Special.None;
-            this._state = State.InClosingTagName;
-            this.stateInClosingTagName(c); // Reconsume the token
-        } else this._state = State.Text;
+
+    private startEntity() {
+        this.baseState = this.state;
+        this.state = State.InEntity;
+        this.entityStart = this.index;
+        this.entityDecoder.startEntity(
+            this.xmlMode
+                ? DecodingMode.Strict
+                : this.baseState === State.Text ||
+                  this.baseState === State.InSpecialTag
+                ? DecodingMode.Legacy
+                : DecodingMode.Attribute
+        );
     }
 
-    private trieIndex = 0;
-    private trieCurrent = 0;
-    private trieResult: string | null = null;
-    private trieExcess = 0;
-
-    private stateBeforeEntity(c: number) {
-        if (c === CharCodes.Num) {
-            this._state = State.BeforeNumericEntity;
-        } else if (c === CharCodes.Amp) {
-            // We have two `&` characters in a row. Emit the first one.
-            this.emitPartial(this.getSection());
-            this.sectionStart = this._index;
-        } else {
-            this._state = State.InNamedEntity;
-            this.trieIndex = 0;
-            this.trieCurrent = this.entityTrie[0];
-            this.trieResult = null;
-            // Start excess with 1 to include the '&'
-            this.trieExcess = 1;
-            this._index--;
-        }
-    }
-
-    private stateInNamedEntity(c: number) {
-        this.trieExcess += 1;
-
-        this.trieIndex = determineBranch(
-            this.entityTrie,
-            this.trieCurrent,
-            this.trieIndex + 1,
-            c
+    private stateInEntity(): void {
+        const length = this.entityDecoder.write(
+            this.buffer,
+            this.index - this.offset
         );
 
-        if (this.trieIndex < 0) {
-            this.emitNamedEntity();
-            this._index--;
-            return;
-        }
+        // If `length` is positive, we are done with the entity.
+        if (length >= 0) {
+            this.state = this.baseState;
 
-        this.trieCurrent = this.entityTrie[this.trieIndex];
-
-        // If the branch is a value, store it and continue
-        if (this.trieCurrent & BinTrieFlags.HAS_VALUE) {
-            // If we have a legacy entity while parsing strictly, just skip the number of bytes
-            if (!this.allowLegacyEntity() && c !== CharCodes.Semi) {
-                // No need to consider multi-byte values, as the legacy entity is always a single byte
-                this.trieIndex += 1;
-            } else {
-                // If this is a surrogate pair, combine the higher bits from the node with the next byte
-                this.trieResult =
-                    this.trieCurrent & BinTrieFlags.MULTI_BYTE
-                        ? String.fromCharCode(
-                              this.entityTrie[++this.trieIndex],
-                              this.entityTrie[++this.trieIndex]
-                          )
-                        : String.fromCharCode(
-                              this.entityTrie[++this.trieIndex]
-                          );
-                this.trieExcess = 0;
+            if (length === 0) {
+                this.index = this.entityStart;
             }
+        } else {
+            // Mark buffer as consumed.
+            this.index = this.offset + this.buffer.length - 1;
         }
-    }
-
-    private emitNamedEntity() {
-        if (this.trieResult) {
-            this.emitPartial(this.trieResult);
-        }
-
-        this.sectionStart = this._index - this.trieExcess + 1;
-        this._state = this.baseState;
-    }
-
-    private decodeNumericEntity(base: 10 | 16, strict: boolean) {
-        const sectionStart = this.sectionStart + 2 + (base >> 4);
-        if (sectionStart !== this._index) {
-            // Parse entity
-            const entity = this.buffer.substring(sectionStart, this._index);
-            const parsed = parseInt(entity, base);
-            this.emitPartial(decodeCodePoint(parsed));
-            this.sectionStart = this._index + Number(strict);
-        }
-        this._state = this.baseState;
-    }
-    private stateInNumericEntity(c: number) {
-        if (c === CharCodes.Semi) {
-            this.decodeNumericEntity(10, true);
-        } else if (c < CharCodes.Zero || c > CharCodes.Nine) {
-            if (this.allowLegacyEntity()) {
-                this.decodeNumericEntity(10, false);
-            } else {
-                this._state = this.baseState;
-            }
-            this._index--;
-        }
-    }
-    private stateInHexEntity(c: number) {
-        if (c === CharCodes.Semi) {
-            this.decodeNumericEntity(16, true);
-        } else if (
-            (c < CharCodes.LowerA || c > CharCodes.LowerF) &&
-            (c < CharCodes.UpperA || c > CharCodes.UpperF) &&
-            (c < CharCodes.Zero || c > CharCodes.Nine)
-        ) {
-            if (this.allowLegacyEntity()) {
-                this.decodeNumericEntity(16, false);
-            } else {
-                this._state = this.baseState;
-            }
-            this._index--;
-        }
-    }
-
-    private allowLegacyEntity() {
-        return !this.xmlMode && this.baseState === State.Text;
     }
 
     /**
      * Remove data that has already been consumed from the buffer.
      */
     private cleanup() {
-        // If we are inside of text, emit what we already have.
-        if (
-            this.running &&
-            this._state === State.Text &&
-            this.sectionStart !== this._index
-        ) {
-            // TODO: We could emit attribute data here as well.
-            this.cbs.ontext(this.buffer.substr(this.sectionStart));
-            this.sectionStart = this._index;
+        // If we are inside of text or attributes, emit what we already have.
+        if (this.running && this.sectionStart !== this.index) {
+            if (
+                this.state === State.Text ||
+                (this.state === State.InSpecialTag && this.sequenceIndex === 0)
+            ) {
+                this.cbs.ontext(this.sectionStart, this.index);
+                this.sectionStart = this.index;
+            } else if (
+                this.state === State.InAttributeValueDq ||
+                this.state === State.InAttributeValueSq ||
+                this.state === State.InAttributeValueNq
+            ) {
+                this.cbs.onattribdata(this.sectionStart, this.index);
+                this.sectionStart = this.index;
+            }
         }
+    }
 
-        const start = this.sectionStart < 0 ? this._index : this.sectionStart;
-        this.buffer =
-            start === this.buffer.length ? "" : this.buffer.substr(start);
-        this._index -= start;
-        this.bufferOffset += start;
-
-        if (this.sectionStart > 0) {
-            this.sectionStart = 0;
-        }
+    private shouldContinue() {
+        return this.index < this.buffer.length + this.offset && this.running;
     }
 
     /**
@@ -849,212 +651,181 @@ export default class Tokenizer {
      * States that are more likely to be hit are higher up, as a performance improvement.
      */
     private parse() {
-        while (this._index < this.buffer.length && this.running) {
-            const c = this.buffer.charCodeAt(this._index);
-            if (this._state === State.Text) {
-                this.stateText(c);
-            } else if (this._state === State.InAttributeValueDq) {
-                this.stateInAttributeValueDoubleQuotes(c);
-            } else if (this._state === State.InAttributeName) {
-                this.stateInAttributeName(c);
-            } else if (this._state === State.InComment) {
-                this.stateInComment(c);
-            } else if (this._state === State.InSpecialComment) {
-                this.stateInSpecialComment(c);
-            } else if (this._state === State.BeforeAttributeName) {
-                this.stateBeforeAttributeName(c);
-            } else if (this._state === State.InTagName) {
-                this.stateInTagName(c);
-            } else if (this._state === State.InClosingTagName) {
-                this.stateInClosingTagName(c);
-            } else if (this._state === State.BeforeTagName) {
-                this.stateBeforeTagName(c);
-            } else if (this._state === State.AfterAttributeName) {
-                this.stateAfterAttributeName(c);
-            } else if (this._state === State.InAttributeValueSq) {
-                this.stateInAttributeValueSingleQuotes(c);
-            } else if (this._state === State.BeforeAttributeValue) {
-                this.stateBeforeAttributeValue(c);
-            } else if (this._state === State.BeforeClosingTagName) {
-                this.stateBeforeClosingTagName(c);
-            } else if (this._state === State.AfterClosingTagName) {
-                this.stateAfterClosingTagName(c);
-            } else if (this._state === State.BeforeSpecialS) {
-                this.stateBeforeSpecialS(c);
-            } else if (this._state === State.AfterComment1) {
-                this.stateAfterComment1(c);
-            } else if (this._state === State.InAttributeValueNq) {
-                this.stateInAttributeValueNoQuotes(c);
-            } else if (this._state === State.InSelfClosingTag) {
-                this.stateInSelfClosingTag(c);
-            } else if (this._state === State.InDeclaration) {
-                this.stateInDeclaration(c);
-            } else if (this._state === State.BeforeDeclaration) {
-                this.stateBeforeDeclaration(c);
-            } else if (this._state === State.AfterComment2) {
-                this.stateAfterComment2(c);
-            } else if (this._state === State.BeforeComment) {
-                this.stateBeforeComment(c);
-            } else if (this._state === State.BeforeSpecialSEnd) {
-                this.stateBeforeSpecialSEnd(c);
-            } else if (this._state === State.BeforeSpecialTEnd) {
-                stateBeforeSpecialTEnd(this, c);
-            } else if (this._state === State.AfterScript1) {
-                stateAfterScript1(this, c);
-            } else if (this._state === State.AfterScript2) {
-                stateAfterScript2(this, c);
-            } else if (this._state === State.AfterScript3) {
-                stateAfterScript3(this, c);
-            } else if (this._state === State.BeforeScript1) {
-                stateBeforeScript1(this, c);
-            } else if (this._state === State.BeforeScript2) {
-                stateBeforeScript2(this, c);
-            } else if (this._state === State.BeforeScript3) {
-                stateBeforeScript3(this, c);
-            } else if (this._state === State.BeforeScript4) {
-                stateBeforeScript4(this, c);
-            } else if (this._state === State.BeforeScript5) {
-                this.stateBeforeSpecialLast(c, Special.Script);
-            } else if (this._state === State.AfterScript4) {
-                stateAfterScript4(this, c);
-            } else if (this._state === State.AfterScript5) {
-                this.stateAfterSpecialLast(c, 6);
-            } else if (this._state === State.BeforeStyle1) {
-                stateBeforeStyle1(this, c);
-            } else if (this._state === State.InCdata) {
-                this.stateInCdata(c);
-            } else if (this._state === State.BeforeStyle2) {
-                stateBeforeStyle2(this, c);
-            } else if (this._state === State.BeforeStyle3) {
-                stateBeforeStyle3(this, c);
-            } else if (this._state === State.BeforeStyle4) {
-                this.stateBeforeSpecialLast(c, Special.Style);
-            } else if (this._state === State.AfterStyle1) {
-                stateAfterStyle1(this, c);
-            } else if (this._state === State.AfterStyle2) {
-                stateAfterStyle2(this, c);
-            } else if (this._state === State.AfterStyle3) {
-                stateAfterStyle3(this, c);
-            } else if (this._state === State.AfterStyle4) {
-                this.stateAfterSpecialLast(c, 5);
-            } else if (this._state === State.BeforeSpecialT) {
-                stateBeforeSpecialT(this, c);
-            } else if (this._state === State.BeforeTitle1) {
-                stateBeforeTitle1(this, c);
-            } else if (this._state === State.BeforeTitle2) {
-                stateBeforeTitle2(this, c);
-            } else if (this._state === State.BeforeTitle3) {
-                stateBeforeTitle3(this, c);
-            } else if (this._state === State.BeforeTitle4) {
-                this.stateBeforeSpecialLast(c, Special.Title);
-            } else if (this._state === State.AfterTitle1) {
-                stateAfterTitle1(this, c);
-            } else if (this._state === State.AfterTitle2) {
-                stateAfterTitle2(this, c);
-            } else if (this._state === State.AfterTitle3) {
-                stateAfterTitle3(this, c);
-            } else if (this._state === State.AfterTitle4) {
-                this.stateAfterSpecialLast(c, 5);
-            } else if (this._state === State.InProcessingInstruction) {
-                this.stateInProcessingInstruction(c);
-            } else if (this._state === State.InNamedEntity) {
-                this.stateInNamedEntity(c);
-            } else if (this._state === State.BeforeCdata1) {
-                stateBeforeCdata1(this, c);
-            } else if (this._state === State.BeforeEntity) {
-                this.stateBeforeEntity(c);
-            } else if (this._state === State.BeforeCdata2) {
-                stateBeforeCdata2(this, c);
-            } else if (this._state === State.BeforeCdata3) {
-                stateBeforeCdata3(this, c);
-            } else if (this._state === State.AfterCdata1) {
-                this.stateAfterCdata1(c);
-            } else if (this._state === State.AfterCdata2) {
-                this.stateAfterCdata2(c);
-            } else if (this._state === State.BeforeCdata4) {
-                stateBeforeCdata4(this, c);
-            } else if (this._state === State.BeforeCdata5) {
-                stateBeforeCdata5(this, c);
-            } else if (this._state === State.BeforeCdata6) {
-                this.stateBeforeCdata6(c);
-            } else if (this._state === State.InHexEntity) {
-                this.stateInHexEntity(c);
-            } else if (this._state === State.InNumericEntity) {
-                this.stateInNumericEntity(c);
-            } else {
-                // `this._state === State.BeforeNumericEntity`
-                stateBeforeNumericEntity(this, c);
+        while (this.shouldContinue()) {
+            const c = this.buffer.charCodeAt(this.index - this.offset);
+            switch (this.state) {
+                case State.Text: {
+                    this.stateText(c);
+                    break;
+                }
+                case State.SpecialStartSequence: {
+                    this.stateSpecialStartSequence(c);
+                    break;
+                }
+                case State.InSpecialTag: {
+                    this.stateInSpecialTag(c);
+                    break;
+                }
+                case State.CDATASequence: {
+                    this.stateCDATASequence(c);
+                    break;
+                }
+                case State.InAttributeValueDq: {
+                    this.stateInAttributeValueDoubleQuotes(c);
+                    break;
+                }
+                case State.InAttributeName: {
+                    this.stateInAttributeName(c);
+                    break;
+                }
+                case State.InCommentLike: {
+                    this.stateInCommentLike(c);
+                    break;
+                }
+                case State.InSpecialComment: {
+                    this.stateInSpecialComment(c);
+                    break;
+                }
+                case State.BeforeAttributeName: {
+                    this.stateBeforeAttributeName(c);
+                    break;
+                }
+                case State.InTagName: {
+                    this.stateInTagName(c);
+                    break;
+                }
+                case State.InClosingTagName: {
+                    this.stateInClosingTagName(c);
+                    break;
+                }
+                case State.BeforeTagName: {
+                    this.stateBeforeTagName(c);
+                    break;
+                }
+                case State.AfterAttributeName: {
+                    this.stateAfterAttributeName(c);
+                    break;
+                }
+                case State.InAttributeValueSq: {
+                    this.stateInAttributeValueSingleQuotes(c);
+                    break;
+                }
+                case State.BeforeAttributeValue: {
+                    this.stateBeforeAttributeValue(c);
+                    break;
+                }
+                case State.BeforeClosingTagName: {
+                    this.stateBeforeClosingTagName(c);
+                    break;
+                }
+                case State.AfterClosingTagName: {
+                    this.stateAfterClosingTagName(c);
+                    break;
+                }
+                case State.BeforeSpecialS: {
+                    this.stateBeforeSpecialS(c);
+                    break;
+                }
+                case State.InAttributeValueNq: {
+                    this.stateInAttributeValueNoQuotes(c);
+                    break;
+                }
+                case State.InSelfClosingTag: {
+                    this.stateInSelfClosingTag(c);
+                    break;
+                }
+                case State.InDeclaration: {
+                    this.stateInDeclaration(c);
+                    break;
+                }
+                case State.BeforeDeclaration: {
+                    this.stateBeforeDeclaration(c);
+                    break;
+                }
+                case State.BeforeComment: {
+                    this.stateBeforeComment(c);
+                    break;
+                }
+                case State.InProcessingInstruction: {
+                    this.stateInProcessingInstruction(c);
+                    break;
+                }
+                case State.InEntity: {
+                    this.stateInEntity();
+                    break;
+                }
             }
-            this._index++;
+            this.index++;
         }
         this.cleanup();
     }
 
     private finish() {
-        // If there is remaining data, emit it in a reasonable way
-        if (this.sectionStart < this._index) {
-            this.handleTrailingData();
+        if (this.state === State.InEntity) {
+            this.entityDecoder.end();
+            this.state = this.baseState;
         }
+
+        this.handleTrailingData();
+
         this.cbs.onend();
     }
 
     /** Handle any trailing data. */
     private handleTrailingData() {
-        const data = this.buffer.substr(this.sectionStart);
-        if (
-            this._state === State.InCdata ||
-            this._state === State.AfterCdata1 ||
-            this._state === State.AfterCdata2
-        ) {
-            this.cbs.oncdata(data);
-        } else if (
-            this._state === State.InComment ||
-            this._state === State.AfterComment1 ||
-            this._state === State.AfterComment2
-        ) {
-            this.cbs.oncomment(data);
-        } else if (this._state === State.InNamedEntity && !this.xmlMode) {
-            // Increase excess for EOF
-            this.trieExcess++;
-            this.emitNamedEntity();
-            if (this.sectionStart < this._index) {
-                this._state = this.baseState;
-                this.handleTrailingData();
+        const endIndex = this.buffer.length + this.offset;
+
+        // If there is no remaining data, we are done.
+        if (this.sectionStart >= endIndex) {
+            return;
+        }
+
+        if (this.state === State.InCommentLike) {
+            if (this.currentSequence === Sequences.CdataEnd) {
+                this.cbs.oncdata(this.sectionStart, endIndex, 0);
+            } else {
+                this.cbs.oncomment(this.sectionStart, endIndex, 0);
             }
-        } else if (this._state === State.InNumericEntity && !this.xmlMode) {
-            this.decodeNumericEntity(10, false);
-            // All trailing data will have been consumed
-        } else if (this._state === State.InHexEntity && !this.xmlMode) {
-            this.decodeNumericEntity(16, false);
-            // All trailing data will have been consumed
         } else if (
-            this._state === State.InTagName ||
-            this._state === State.BeforeAttributeName ||
-            this._state === State.BeforeAttributeValue ||
-            this._state === State.AfterAttributeName ||
-            this._state === State.InAttributeName ||
-            this._state === State.InAttributeValueSq ||
-            this._state === State.InAttributeValueDq ||
-            this._state === State.InAttributeValueNq ||
-            this._state === State.InClosingTagName
+            this.state === State.InTagName ||
+            this.state === State.BeforeAttributeName ||
+            this.state === State.BeforeAttributeValue ||
+            this.state === State.AfterAttributeName ||
+            this.state === State.InAttributeName ||
+            this.state === State.InAttributeValueSq ||
+            this.state === State.InAttributeValueDq ||
+            this.state === State.InAttributeValueNq ||
+            this.state === State.InClosingTagName
         ) {
             /*
              * If we are currently in an opening or closing tag, us not calling the
              * respective callback signals that the tag should be ignored.
              */
         } else {
-            this.cbs.ontext(data);
+            this.cbs.ontext(this.sectionStart, endIndex);
         }
     }
 
-    private getSection(): string {
-        return this.buffer.substring(this.sectionStart, this._index);
-    }
-    private emitPartial(value: string) {
-        if (this.baseState !== State.Text) {
-            this.cbs.onattribdata(value);
+    private emitCodePoint(cp: number, consumed: number): void {
+        if (
+            this.baseState !== State.Text &&
+            this.baseState !== State.InSpecialTag
+        ) {
+            if (this.sectionStart < this.entityStart) {
+                this.cbs.onattribdata(this.sectionStart, this.entityStart);
+            }
+            this.sectionStart = this.entityStart + consumed;
+            this.index = this.sectionStart - 1;
+
+            this.cbs.onattribentity(cp);
         } else {
-            this.cbs.ontext(value);
+            if (this.sectionStart < this.entityStart) {
+                this.cbs.ontext(this.sectionStart, this.entityStart);
+            }
+            this.sectionStart = this.entityStart + consumed;
+            this.index = this.sectionStart - 1;
+
+            this.cbs.ontextentity(cp, this.sectionStart);
         }
     }
 }

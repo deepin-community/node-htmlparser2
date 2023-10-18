@@ -1,0 +1,16 @@
+Description: workaround bad jest config
+Author: Yadd <yadd@debian.org>
+Forwarded: not-needed
+Last-Update: 2023-07-16
+
+--- a/package.json
++++ b/package.json
+@@ -85,7 +85,7 @@
+         "testEnvironment": "node",
+         "coverageProvider": "v8",
+         "moduleNameMapper": {
+-            "^(.*)\\.js$": [
++            "^([^e].*)\\.js$": [
+                 "$1",
+                 "$1.js"
+             ]

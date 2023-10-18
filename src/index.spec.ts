@@ -1,12 +1,11 @@
 import {
     parseDocument,
     parseDOM,
+    createDocumentStream,
     createDomStream,
     DomHandler,
     DefaultHandler,
-    RssHandler,
-} from ".";
-import { FeedHandler } from "./FeedHandler";
+} from "./index.js";
 import { Element } from "domhandler";
 
 // Add an `attributes` prop to the Element for now, to make it possible for Jest to render DOM nodes.
@@ -32,9 +31,24 @@ describe("Index", () => {
         expect(dom).toMatchSnapshot();
     });
 
+    test("createDocumentStream", (done) => {
+        const domStream = createDocumentStream((error, dom) => {
+            expect(error).toBeNull();
+            expect(dom).toMatchSnapshot();
+
+            done();
+        });
+
+        for (const c of "&amp;This is text<!-- and comments --><tags>") {
+            domStream.write(c);
+        }
+
+        domStream.end();
+    });
+
     test("createDomStream", (done) => {
-        const domStream = createDomStream((err, dom) => {
-            expect(err).toBeNull();
+        const domStream = createDomStream((error, dom) => {
+            expect(error).toBeNull();
             expect(dom).toMatchSnapshot();
 
             done();
@@ -49,7 +63,6 @@ describe("Index", () => {
 
     describe("API", () => {
         it("should export the appropriate APIs", () => {
-            expect(RssHandler).toEqual(FeedHandler);
             expect(DomHandler).toEqual(DefaultHandler);
         });
     });
