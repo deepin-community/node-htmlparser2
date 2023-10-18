@@ -1,3 +1,7 @@
-jest-diff	test
-pretty-format	test
+domelementtype
+domhandler
+domutils
+entities
+@types/jest	test
+@types/node
 ts-jest test

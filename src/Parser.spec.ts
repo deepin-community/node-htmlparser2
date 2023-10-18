@@ -1,5 +1,5 @@
-import { Parser, Tokenizer } from ".";
-import type { Handler } from "./Parser";
+import { Parser, Tokenizer } from "./index.js";
+import type { Handler } from "./Parser.js";
 
 describe("API", () => {
     test("should work without callbacks", () => {
@@ -48,11 +48,11 @@ describe("API", () => {
         p.resume();
         expect(onText).toHaveBeenCalledTimes(1);
         p.pause();
-        p.end("foo");
+        p.end("bar");
         expect(onText).toHaveBeenCalledTimes(1);
         p.resume();
         expect(onText).toHaveBeenCalledTimes(2);
-        expect(onText).toHaveBeenLastCalledWith("foo");
+        expect(onText).toHaveBeenLastCalledWith("bar");
     });
 
     test("should back out of numeric entities (#125)", () => {
@@ -104,7 +104,7 @@ describe("API", () => {
         p.write("<hr>");
 
         expect(onopentag).toHaveBeenLastCalledWith("hr", 6, 9);
-        expect(onclosetag).toBeCalledTimes(2);
+        expect(onclosetag).toHaveBeenCalledTimes(2);
         expect(onclosetag).toHaveBeenNthCalledWith(1, "p", 9);
         expect(onclosetag).toHaveBeenNthCalledWith(2, "hr", 9);
     });

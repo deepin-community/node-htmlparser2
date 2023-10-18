@@ -1,0 +1,18 @@
+Description: fix for jest >= 29
+Author: Yadd <yadd@debian.org>
+Forwarded: not-needed
+Last-Update: 2022-10-18
+
+--- a/package.json
++++ b/package.json
+@@ -81,6 +81,10 @@
+         "typescript": "^5.0.4"
+     },
+     "jest": {
++        "snapshotFormat": {
++          "escapeString": true,
++          "printBasicPrototype": true
++        },
+         "preset": "ts-jest",
+         "testEnvironment": "node",
+         "coverageProvider": "v8",

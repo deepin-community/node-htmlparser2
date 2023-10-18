@@ -1,184 +1,441 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
+exports[`Tokenizer should handle entities for XML entities 1`] = `
+[
+  [
+    "ontextentity",
+    38,
+    5,
+  ],
+  [
+    "ontextentity",
+    62,
+    9,
+  ],
+  [
+    "ontext",
+    9,
+    13,
+  ],
+  [
+    "ontextentity",
+    60,
+    17,
+  ],
+  [
+    "ontext",
+    17,
+    23,
+  ],
+  [
+    "ontextentity",
+    97,
+    29,
+  ],
+  [
+    "ontext",
+    29,
+    34,
+  ],
+  [
+    "ontextentity",
+    99,
+    39,
+  ],
+  [
+    "ontext",
+    39,
+    49,
+  ],
+  [
+    "onend",
+  ],
+]
+`;
+
+exports[`Tokenizer should handle entities for entities in attributes (#276) 1`] = `
+[
+  [
+    "onopentagname",
+    1,
+    4,
+  ],
+  [
+    "onattribname",
+    5,
+    8,
+  ],
+  [
+    "onattribdata",
+    10,
+    24,
+  ],
+  [
+    "onattribentity",
+    8465,
+  ],
+  [
+    "onattribdata",
+    31,
+    41,
+  ],
+  [
+    "onattribend",
+    3,
+    41,
+  ],
+  [
+    "onselfclosingtag",
+    43,
+  ],
+  [
+    "ontext",
+    44,
+    58,
+  ],
+  [
+    "ontextentity",
+    8465,
+    65,
+  ],
+  [
+    "ontext",
+    65,
+    75,
+  ],
+  [
+    "onend",
+  ],
+]
+`;
+
+exports[`Tokenizer should handle entities for multi-byte entities 1`] = `
+[
+  [
+    "ontextentity",
+    8807,
+    21,
+  ],
+  [
+    "ontextentity",
+    824,
+    21,
+  ],
+  [
+    "onend",
+  ],
+]
+`;
+
+exports[`Tokenizer should handle entities for trailing legacy entity 1`] = `
+[
+  [
+    "ontextentity",
+    10801,
+    10,
+  ],
+  [
+    "ontextentity",
+    215,
+    16,
+  ],
+  [
+    "ontext",
+    16,
+    19,
+  ],
+  [
+    "onend",
+  ],
+]
+`;
+
+exports[`Tokenizer should not break after special tag followed by an entity for normal special tag 1`] = `
+[
+  [
+    "onopentagname",
+    1,
+    6,
+  ],
+  [
+    "onopentagend",
+    6,
+  ],
+  [
+    "ontext",
+    7,
+    10,
+  ],
+  [
+    "onclosetag",
+    12,
+    17,
+  ],
+  [
+    "ontextentity",
+    39,
+    24,
+  ],
+  [
+    "onopentagname",
+    25,
+    27,
+  ],
+  [
+    "onselfclosingtag",
+    28,
+  ],
+  [
+    "onend",
+  ],
+]
+`;
+
+exports[`Tokenizer should not break after special tag followed by an entity for self-closing special tag 1`] = `
+[
+  [
+    "onopentagname",
+    1,
+    6,
+  ],
+  [
+    "onselfclosingtag",
+    8,
+  ],
+  [
+    "ontextentity",
+    39,
+    15,
+  ],
+  [
+    "onopentagname",
+    16,
+    18,
+  ],
+  [
+    "onselfclosingtag",
+    19,
+  ],
+  [
+    "onend",
+  ],
+]
+`;
+
 exports[`Tokenizer should not lose data when pausing 1`] = `
-Array [
-  Array [
-    "ontext",
-    "&",
+[
+  [
+    "ontextentity",
+    38,
+    5,
   ],
-  Array [
+  [
     "ontext",
-    " it up!",
+    5,
+    12,
   ],
-  Array [
+  [
     "onend",
   ],
 ]
 `;
 
 exports[`Tokenizer should support self-closing special tags for self-closing script tag 1`] = `
-Array [
-  Array [
+[
+  [
     "onopentagname",
-    "script",
+    1,
+    7,
   ],
-  Array [
+  [
     "onselfclosingtag",
+    9,
   ],
-  Array [
+  [
     "onopentagname",
-    "div",
+    11,
+    14,
   ],
-  Array [
+  [
     "onopentagend",
+    14,
   ],
-  Array [
+  [
     "onclosetag",
-    "div",
+    17,
+    20,
   ],
-  Array [
+  [
     "onend",
   ],
 ]
 `;
 
 exports[`Tokenizer should support self-closing special tags for self-closing style tag 1`] = `
-Array [
-  Array [
+[
+  [
     "onopentagname",
-    "style",
+    1,
+    6,
   ],
-  Array [
+  [
     "onselfclosingtag",
+    8,
   ],
-  Array [
+  [
     "onopentagname",
-    "div",
+    10,
+    13,
   ],
-  Array [
+  [
     "onopentagend",
+    13,
   ],
-  Array [
+  [
     "onclosetag",
-    "div",
+    16,
+    19,
   ],
-  Array [
+  [
     "onend",
   ],
 ]
 `;
 
 exports[`Tokenizer should support self-closing special tags for self-closing title tag 1`] = `
-Array [
-  Array [
+[
+  [
     "onopentagname",
-    "title",
+    1,
+    6,
   ],
-  Array [
+  [
     "onselfclosingtag",
+    8,
   ],
-  Array [
+  [
     "onopentagname",
-    "div",
+    10,
+    13,
   ],
-  Array [
+  [
     "onopentagend",
+    13,
   ],
-  Array [
+  [
     "onclosetag",
-    "div",
+    16,
+    19,
   ],
-  Array [
+  [
     "onend",
   ],
 ]
 `;
 
 exports[`Tokenizer should support standard special tags for normal script tag 1`] = `
-Array [
-  Array [
+[
+  [
     "onopentagname",
-    "script",
+    1,
+    7,
   ],
-  Array [
+  [
     "onopentagend",
+    7,
   ],
-  Array [
+  [
     "onclosetag",
-    "script",
+    10,
+    16,
   ],
-  Array [
+  [
     "onopentagname",
-    "div",
+    18,
+    21,
   ],
-  Array [
+  [
     "onopentagend",
+    21,
   ],
-  Array [
+  [
     "onclosetag",
-    "div",
+    24,
+    27,
   ],
-  Array [
+  [
     "onend",
   ],
 ]
 `;
 
 exports[`Tokenizer should support standard special tags for normal sitle tag 1`] = `
-Array [
-  Array [
+[
+  [
     "onopentagname",
-    "title",
+    1,
+    6,
   ],
-  Array [
+  [
     "onopentagend",
+    6,
   ],
-  Array [
+  [
     "onclosetag",
-    "title",
+    9,
+    14,
   ],
-  Array [
+  [
     "onopentagname",
-    "div",
+    16,
+    19,
   ],
-  Array [
+  [
     "onopentagend",
+    19,
   ],
-  Array [
+  [
     "onclosetag",
-    "div",
+    22,
+    25,
   ],
-  Array [
+  [
     "onend",
   ],
 ]
 `;
 
 exports[`Tokenizer should support standard special tags for normal style tag 1`] = `
-Array [
-  Array [
+[
+  [
     "onopentagname",
-    "style",
+    1,
+    6,
   ],
-  Array [
+  [
     "onopentagend",
+    6,
   ],
-  Array [
+  [
     "onclosetag",
-    "style",
+    9,
+    14,
   ],
-  Array [
+  [
     "onopentagname",
-    "div",
+    16,
+    19,
   ],
-  Array [
+  [
     "onopentagend",
+    19,
   ],
-  Array [
+  [
     "onclosetag",
-    "div",
+    22,
+    25,
   ],
-  Array [
+  [
     "onend",
   ],
 ]

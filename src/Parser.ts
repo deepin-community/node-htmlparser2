@@ -1,4 +1,5 @@
-import Tokenizer from "./Tokenizer";
+import Tokenizer, { Callbacks, QuoteType } from "./Tokenizer.js";
+import { fromCodePoint } from "entities/lib/decode.js";
 
 const formTags = new Set([
     "input",
@@ -195,7 +196,7 @@ export interface Handler {
 
 const reNameEnd = /\s|\//;
 
-export class Parser {
+export class Parser implements Callbacks {
     /** The start index of the last event. */
     public startIndex = 0;
     /** The end index of the last event. */
@@ -210,45 +211,70 @@ export class Parser {
     private attribname = "";
     private attribvalue = "";
     private attribs: null | { [key: string]: string } = null;
-    private stack: string[] = [];
-    private readonly foreignContext: boolean[] = [];
+    private readonly stack: string[] = [];
+    /** Determines whether self-closing tags are recognized. */
+    private readonly foreignContext: boolean[];
     private readonly cbs: Partial<Handler>;
     private readonly lowerCaseTagNames: boolean;
     private readonly lowerCaseAttributeNames: boolean;
+    /** We are parsing HTML. Inverse of the `xmlMode` option. */
+    private readonly htmlMode: boolean;
     private readonly tokenizer: Tokenizer;
+
+    private readonly buffers: string[] = [];
+    private bufferOffset = 0;
+    /** The index of the last written buffer. Used when resuming after a `pause()`. */
+    private writeIndex = 0;
+    /** Indicates whether the parser has finished running / `.end` has been called. */
+    private ended = false;
 
     constructor(
         cbs?: Partial<Handler> | null,
         private readonly options: ParserOptions = {}
     ) {
         this.cbs = cbs ?? {};
-        this.lowerCaseTagNames = options.lowerCaseTags ?? !options.xmlMode;
+        this.htmlMode = !this.options.xmlMode;
+        this.lowerCaseTagNames = options.lowerCaseTags ?? this.htmlMode;
         this.lowerCaseAttributeNames =
-            options.lowerCaseAttributeNames ?? !options.xmlMode;
+            options.lowerCaseAttributeNames ?? this.htmlMode;
         this.tokenizer = new (options.Tokenizer ?? Tokenizer)(
             this.options,
             this
         );
+        this.foreignContext = [!this.htmlMode];
         this.cbs.onparserinit?.(this);
     }
 
     // Tokenizer event handlers
 
     /** @internal */
-    ontext(data: string): void {
-        const idx = this.tokenizer.getAbsoluteIndex();
-        this.endIndex = idx - 1;
+    ontext(start: number, endIndex: number): void {
+        const data = this.getSlice(start, endIndex);
+        this.endIndex = endIndex - 1;
         this.cbs.ontext?.(data);
-        this.startIndex = idx;
-    }
-
-    protected isVoidElement(name: string): boolean {
-        return !this.options.xmlMode && voidElements.has(name);
+        this.startIndex = endIndex;
     }
 
     /** @internal */
-    onopentagname(name: string): void {
-        this.endIndex = this.tokenizer.getAbsoluteIndex();
+    ontextentity(cp: number, endIndex: number): void {
+        this.endIndex = endIndex - 1;
+        this.cbs.ontext?.(fromCodePoint(cp));
+        this.startIndex = endIndex;
+    }
+
+    /**
+     * Checks if the current tag is a void element. Override this if you want
+     * to specify your own additional void elements.
+     */
+    protected isVoidElement(name: string): boolean {
+        return this.htmlMode && voidElements.has(name);
+    }
+
+    /** @internal */
+    onopentagname(start: number, endIndex: number): void {
+        this.endIndex = endIndex;
+
+        let name = this.getSlice(start, endIndex);
 
         if (this.lowerCaseTagNames) {
             name = name.toLowerCase();
@@ -261,24 +287,23 @@ export class Parser {
         this.openTagStart = this.startIndex;
         this.tagname = name;
 
-        const impliesClose =
-            !this.options.xmlMode && openImpliesClose.get(name);
+        const impliesClose = this.htmlMode && openImpliesClose.get(name);
 
         if (impliesClose) {
-            while (
-                this.stack.length > 0 &&
-                impliesClose.has(this.stack[this.stack.length - 1])
-            ) {
-                const el = this.stack.pop()!;
-                this.cbs.onclosetag?.(el, true);
+            while (this.stack.length > 0 && impliesClose.has(this.stack[0])) {
+                const element = this.stack.shift()!;
+                this.cbs.onclosetag?.(element, true);
             }
         }
         if (!this.isVoidElement(name)) {
-            this.stack.push(name);
-            if (foreignContextElements.has(name)) {
-                this.foreignContext.push(true);
-            } else if (htmlIntegrationElements.has(name)) {
-                this.foreignContext.push(false);
+            this.stack.unshift(name);
+
+            if (this.htmlMode) {
+                if (foreignContextElements.has(name)) {
+                    this.foreignContext.unshift(true);
+                } else if (htmlIntegrationElements.has(name)) {
+                    this.foreignContext.unshift(false);
+                }
             }
         }
         this.cbs.onopentagname?.(name);
@@ -287,7 +312,6 @@ export class Parser {
 
     private endOpenTag(isImplied: boolean) {
         this.startIndex = this.openTagStart;
-        this.endIndex = this.tokenizer.getAbsoluteIndex();
 
         if (this.attribs) {
             this.cbs.onopentag?.(this.tagname, this.attribs, isImplied);
@@ -301,67 +325,67 @@ export class Parser {
     }
 
     /** @internal */
-    onopentagend(): void {
+    onopentagend(endIndex: number): void {
+        this.endIndex = endIndex;
         this.endOpenTag(false);
 
         // Set `startIndex` for next node
-        this.startIndex = this.endIndex + 1;
+        this.startIndex = endIndex + 1;
     }
 
     /** @internal */
-    onclosetag(name: string): void {
-        this.endIndex = this.tokenizer.getAbsoluteIndex();
+    onclosetag(start: number, endIndex: number): void {
+        this.endIndex = endIndex;
+
+        let name = this.getSlice(start, endIndex);
 
         if (this.lowerCaseTagNames) {
             name = name.toLowerCase();
         }
 
         if (
-            foreignContextElements.has(name) ||
-            htmlIntegrationElements.has(name)
+            this.htmlMode &&
+            (foreignContextElements.has(name) ||
+                htmlIntegrationElements.has(name))
         ) {
-            this.foreignContext.pop();
+            this.foreignContext.shift();
         }
 
         if (!this.isVoidElement(name)) {
-            const pos = this.stack.lastIndexOf(name);
+            const pos = this.stack.indexOf(name);
             if (pos !== -1) {
-                if (this.cbs.onclosetag) {
-                    let count = this.stack.length - pos;
-                    while (count--) {
-                        // We know the stack has sufficient elements.
-                        this.cbs.onclosetag(this.stack.pop()!, count !== 0);
-                    }
-                } else this.stack.length = pos;
-            } else if (!this.options.xmlMode && name === "p") {
-                this.emitOpenTag(name);
+                for (let index = 0; index <= pos; index++) {
+                    const element = this.stack.shift()!;
+                    // We know the stack has sufficient elements.
+                    this.cbs.onclosetag?.(element, index !== pos);
+                }
+            } else if (this.htmlMode && name === "p") {
+                // Implicit open before close
+                this.emitOpenTag("p");
                 this.closeCurrentTag(true);
             }
-        } else if (!this.options.xmlMode && name === "br") {
-            // We can't go through `emitOpenTag` here, as `br` would be implicitly closed.
-            this.cbs.onopentagname?.(name);
-            this.cbs.onopentag?.(name, {}, true);
-            this.cbs.onclosetag?.(name, false);
+        } else if (this.htmlMode && name === "br") {
+            // We can't use `emitOpenTag` for implicit open, as `br` would be implicitly closed.
+            this.cbs.onopentagname?.("br");
+            this.cbs.onopentag?.("br", {}, true);
+            this.cbs.onclosetag?.("br", false);
         }
 
         // Set `startIndex` for next node
-        this.startIndex = this.endIndex + 1;
+        this.startIndex = endIndex + 1;
     }
 
     /** @internal */
-    onselfclosingtag(): void {
-        if (
-            this.options.xmlMode ||
-            this.options.recognizeSelfClosing ||
-            this.foreignContext[this.foreignContext.length - 1]
-        ) {
+    onselfclosingtag(endIndex: number): void {
+        this.endIndex = endIndex;
+        if (this.options.recognizeSelfClosing || this.foreignContext[0]) {
             this.closeCurrentTag(false);
 
             // Set `startIndex` for next node
-            this.startIndex = this.endIndex + 1;
+            this.startIndex = endIndex + 1;
         } else {
             // Ignore the fact that the tag is self-closing.
-            this.onopentagend();
+            this.onopentagend(endIndex);
         }
     }
 
@@ -370,46 +394,61 @@ export class Parser {
         this.endOpenTag(isOpenImplied);
 
         // Self-closing tags will be on the top of the stack
-        if (this.stack[this.stack.length - 1] === name) {
+        if (this.stack[0] === name) {
             // If the opening tag isn't implied, the closing tag has to be implied.
             this.cbs.onclosetag?.(name, !isOpenImplied);
-            this.stack.pop();
+            this.stack.shift();
         }
     }
 
     /** @internal */
-    onattribname(name: string): void {
-        this.startIndex = this.tokenizer.getAbsoluteSectionStart();
+    onattribname(start: number, endIndex: number): void {
+        this.startIndex = start;
+        const name = this.getSlice(start, endIndex);
 
-        if (this.lowerCaseAttributeNames) {
-            name = name.toLowerCase();
-        }
-        this.attribname = name;
+        this.attribname = this.lowerCaseAttributeNames
+            ? name.toLowerCase()
+            : name;
     }
 
     /** @internal */
-    onattribdata(value: string): void {
-        this.attribvalue += value;
+    onattribdata(start: number, endIndex: number): void {
+        this.attribvalue += this.getSlice(start, endIndex);
     }
 
     /** @internal */
-    onattribend(quote: string | undefined | null): void {
-        this.endIndex = this.tokenizer.getAbsoluteIndex();
+    onattribentity(cp: number): void {
+        this.attribvalue += fromCodePoint(cp);
+    }
 
-        this.cbs.onattribute?.(this.attribname, this.attribvalue, quote);
+    /** @internal */
+    onattribend(quote: QuoteType, endIndex: number): void {
+        this.endIndex = endIndex;
+
+        this.cbs.onattribute?.(
+            this.attribname,
+            this.attribvalue,
+            quote === QuoteType.Double
+                ? '"'
+                : quote === QuoteType.Single
+                ? "'"
+                : quote === QuoteType.NoValue
+                ? undefined
+                : null
+        );
+
         if (
             this.attribs &&
             !Object.prototype.hasOwnProperty.call(this.attribs, this.attribname)
         ) {
             this.attribs[this.attribname] = this.attribvalue;
         }
-        this.attribname = "";
         this.attribvalue = "";
     }
 
     private getInstructionName(value: string) {
-        const idx = value.search(reNameEnd);
-        let name = idx < 0 ? value : value.substr(0, idx);
+        const index = value.search(reNameEnd);
+        let name = index < 0 ? value : value.substr(0, index);
 
         if (this.lowerCaseTagNames) {
             name = name.toLowerCase();
@@ -419,8 +458,9 @@ export class Parser {
     }
 
     /** @internal */
-    ondeclaration(value: string): void {
-        this.endIndex = this.tokenizer.getAbsoluteIndex();
+    ondeclaration(start: number, endIndex: number): void {
+        this.endIndex = endIndex;
+        const value = this.getSlice(start, endIndex);
 
         if (this.cbs.onprocessinginstruction) {
             const name = this.getInstructionName(value);
@@ -428,12 +468,13 @@ export class Parser {
         }
 
         // Set `startIndex` for next node
-        this.startIndex = this.endIndex + 1;
+        this.startIndex = endIndex + 1;
     }
 
     /** @internal */
-    onprocessinginstruction(value: string): void {
-        this.endIndex = this.tokenizer.getAbsoluteIndex();
+    onprocessinginstruction(start: number, endIndex: number): void {
+        this.endIndex = endIndex;
+        const value = this.getSlice(start, endIndex);
 
         if (this.cbs.onprocessinginstruction) {
             const name = this.getInstructionName(value);
@@ -441,25 +482,26 @@ export class Parser {
         }
 
         // Set `startIndex` for next node
-        this.startIndex = this.endIndex + 1;
+        this.startIndex = endIndex + 1;
     }
 
     /** @internal */
-    oncomment(value: string): void {
-        this.endIndex = this.tokenizer.getAbsoluteIndex();
+    oncomment(start: number, endIndex: number, offset: number): void {
+        this.endIndex = endIndex;
 
-        this.cbs.oncomment?.(value);
+        this.cbs.oncomment?.(this.getSlice(start, endIndex - offset));
         this.cbs.oncommentend?.();
 
         // Set `startIndex` for next node
-        this.startIndex = this.endIndex + 1;
+        this.startIndex = endIndex + 1;
     }
 
     /** @internal */
-    oncdata(value: string): void {
-        this.endIndex = this.tokenizer.getAbsoluteIndex();
+    oncdata(start: number, endIndex: number, offset: number): void {
+        this.endIndex = endIndex;
+        const value = this.getSlice(start, endIndex - offset);
 
-        if (this.options.xmlMode || this.options.recognizeCDATA) {
+        if (!this.htmlMode || this.options.recognizeCDATA) {
             this.cbs.oncdatastart?.();
             this.cbs.ontext?.(value);
             this.cbs.oncdataend?.();
@@ -469,12 +511,7 @@ export class Parser {
         }
 
         // Set `startIndex` for next node
-        this.startIndex = this.endIndex + 1;
-    }
-
-    /** @internal */
-    onerror(err: Error): void {
-        this.cbs.onerror?.(err);
+        this.startIndex = endIndex + 1;
     }
 
     /** @internal */
@@ -482,11 +519,9 @@ export class Parser {
         if (this.cbs.onclosetag) {
             // Set the end index for all remaining tags
             this.endIndex = this.startIndex;
-            for (
-                let i = this.stack.length;
-                i > 0;
-                this.cbs.onclosetag(this.stack[--i], true)
-            );
+            for (let index = 0; index < this.stack.length; index++) {
+                this.cbs.onclosetag(this.stack[index], true);
+            }
         }
         this.cbs.onend?.();
     }
@@ -500,10 +535,16 @@ export class Parser {
         this.tagname = "";
         this.attribname = "";
         this.attribs = null;
-        this.stack = [];
+        this.stack.length = 0;
         this.startIndex = 0;
         this.endIndex = 0;
         this.cbs.onparserinit?.(this);
+        this.buffers.length = 0;
+        this.foreignContext.length = 0;
+        this.foreignContext.unshift(!this.htmlMode);
+        this.bufferOffset = 0;
+        this.writeIndex = 0;
+        this.ended = false;
     }
 
     /**
@@ -517,13 +558,46 @@ export class Parser {
         this.end(data);
     }
 
+    private getSlice(start: number, end: number) {
+        while (start - this.bufferOffset >= this.buffers[0].length) {
+            this.shiftBuffer();
+        }
+
+        let slice = this.buffers[0].slice(
+            start - this.bufferOffset,
+            end - this.bufferOffset
+        );
+
+        while (end - this.bufferOffset > this.buffers[0].length) {
+            this.shiftBuffer();
+            slice += this.buffers[0].slice(0, end - this.bufferOffset);
+        }
+
+        return slice;
+    }
+
+    private shiftBuffer(): void {
+        this.bufferOffset += this.buffers[0].length;
+        this.writeIndex--;
+        this.buffers.shift();
+    }
+
     /**
      * Parses a chunk of data and calls the corresponding callbacks.
      *
      * @param chunk Chunk to parse.
      */
     public write(chunk: string): void {
-        this.tokenizer.write(chunk);
+        if (this.ended) {
+            this.cbs.onerror?.(new Error(".write() after done!"));
+            return;
+        }
+
+        this.buffers.push(chunk);
+        if (this.tokenizer.running) {
+            this.tokenizer.write(chunk);
+            this.writeIndex++;
+        }
     }
 
     /**
@@ -532,7 +606,14 @@ export class Parser {
      * @param chunk Optional final chunk to parse.
      */
     public end(chunk?: string): void {
-        this.tokenizer.end(chunk);
+        if (this.ended) {
+            this.cbs.onerror?.(new Error(".end() after done!"));
+            return;
+        }
+
+        if (chunk) this.write(chunk);
+        this.ended = true;
+        this.tokenizer.end();
     }
 
     /**
@@ -547,6 +628,15 @@ export class Parser {
      */
     public resume(): void {
         this.tokenizer.resume();
+
+        while (
+            this.tokenizer.running &&
+            this.writeIndex < this.buffers.length
+        ) {
+            this.tokenizer.write(this.buffers[this.writeIndex++]);
+        }
+
+        if (this.ended) this.tokenizer.end();
     }
 
     /**
